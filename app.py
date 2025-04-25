@@ -1,5 +1,6 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import pandas as pd
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -9,29 +10,41 @@ import ast
 import re
 import os
 import json
+from dotenv import load_dotenv
 
+# تحميل متغيرات البيئة
+load_dotenv()
 
-# 🔹 Initialize Flask
-app = Flask(__name__)
-CORS(app)
+# 🔹 Initialize FastAPI
+app = FastAPI()
+
+# إضافة CORS Middleware (بديل لـ Flask-CORS)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # يسمح لكل المصادر (يمكنك تحديد مصادر معينة لو عايزة)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # 🔹 Initialize Firebase
-# try:
-#     cred = credentials.Certificate("service-account.json")
-#     firebase_admin.initialize_app(cred)
-#     db = firestore.client()
-#     movies_ref = db.collection("Movies")
-# except Exception as e:
-#     print(f"Error initializing Firebase: {e}")
-#     exit(1)
-
 try:
     firebase_credentials = os.getenv("FIREBASE_CREDENTIALS")
-    if firebase_credentials:
+    if not firebase_credentials:
+        print("FIREBASE_CREDENTIALS environment variable not set.")
+        exit(1)
+    try:
+        # تحليل JSON
         cred_dict = json.loads(firebase_credentials)
-        cred = credentials.Certificate(cred_dict)
-    else:
-        cred = credentials.Certificate("service-account.json")
+        # التأكد من أن private_key في صيغة PEM صحيحة
+        if "private_key" in cred_dict:
+            # إزالة أي مسافات زيادة أو أحرف غير ضرورية
+            cred_dict["private_key"] = cred_dict["private_key"].strip()
+    except json.JSONDecodeError as e:
+        print(f"Invalid FIREBASE_CREDENTIALS format: {e}")
+        exit(1)
+    # استخدام البيانات مباشرة كـ dictionary
+    cred = credentials.Certificate(cred_dict)
     firebase_admin.initialize_app(cred)
     db = firestore.client()
     movies_ref = db.collection("Movies")
@@ -237,17 +250,22 @@ def get_bot_response(user_input):
     else:
         return {"bot": "I'm not sure what you're asking. Try mentioning a genre, actor, director, or a movie title."}
 
-# 🔹 API Endpoint
-@app.route('/recommend', methods=['POST'])
-def recommend():
-    data = request.json
-    user_input = data.get("message", "")
-    if not user_input:
-        return jsonify({"error": "Missing message"}), 400
-    response = get_bot_response(user_input)
-    return jsonify({"response": response})
+# 🔹 Root Endpoint
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the Movie Recommendation API! Use POST /recommend to get recommendations."}
 
-# 🔹 Run Server
-if __name__ == '__main__':
+# 🔹 API Endpoint
+@app.post("/recommend")
+async def recommend(request: dict):
+    user_input = request.get("message", "")
+    if not user_input:
+        return JSONResponse(content={"error": "Missing message"}, status_code=400)
+    response = get_bot_response(user_input)
+    return {"response": response}
+
+# 🔹 Run Server (For local testing only; Railway uses gunicorn)
+if __name__ == "__main__":
+    import uvicorn
     port = int(os.getenv("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    uvicorn.run(app, host="0.0.0.0", port=port)
