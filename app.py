@@ -24,14 +24,15 @@ CORS(app)
 # except Exception as e:
 #     print(f"Error initializing Firebase: {e}")
 #     exit(1)
-import os
-import firebase_admin
-from firebase_admin import credentials, firestore
 
 try:
-    # تعيين مسار ملف service-account.json باستخدام GOOGLE_APPLICATION_CREDENTIALS
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/app/service-account.json"
-    firebase_admin.initialize_app()
+    firebase_credentials = os.getenv("FIREBASE_CREDENTIALS")
+    if firebase_credentials:
+        cred_dict = json.loads(firebase_credentials)
+        cred = credentials.Certificate(cred_dict)
+    else:
+        cred = credentials.Certificate("service-account.json")
+    firebase_admin.initialize_app(cred)
     db = firestore.client()
     movies_ref = db.collection("Movies")
 except Exception as e:
