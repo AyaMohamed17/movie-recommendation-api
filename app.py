@@ -141,9 +141,9 @@ def contains_arabic(text):
 
 # 🔹 Plain Text Formatter (for Postman)
 def format_recommendations_json(recommendations):
+    result = {}
     if not recommendations.empty:
-        formatted_recommendations = []
-        for _, row in recommendations.iterrows():
+        for idx, (_, row) in enumerate(recommendations.iterrows(), 1):
             try:
                 year = row['release_date'].year if pd.notnull(row['release_date']) else 'Unknown'
             except AttributeError:
@@ -158,16 +158,13 @@ def format_recommendations_json(recommendations):
                 director = row['crew']['director'] if isinstance(row['crew'], dict) and 'director' in row['crew'] else 'Unknown'
             except Exception:
                 director = 'Unknown'
-            formatted_recommendations.append({
-                "movie_title": row['name'],
-                "genre": row['category'],
-                "imdb_score": row['rating'],
-                "release_year": year,
-                "cast": cast_list,
-                "director": director
-            })
-        return formatted_recommendations
-    return []
+            result[f"movie_title_{idx}"] = row['name']
+            result[f"genre_{idx}"] = row['category']
+            result[f"imdb_score_{idx}"] = row['rating']
+            result[f"release_year_{idx}"] = year
+            result[f"cast_{idx}"] = cast_list
+            result[f"director_{idx}"] = director
+    return result
 
 # 🔹 Classify Input (Updated to use keyword-based rules)
 def classify_input(user_input):
@@ -210,7 +207,7 @@ def get_bot_response(user_input):
     if contains_arabic(user_input):
         return {
             "bot": "Please use English only for communication.",
-            "recommendations": []
+            "recommendations": {}
         }
     
     # Classify the input
@@ -222,7 +219,7 @@ def get_bot_response(user_input):
         greeting_response = handle_greetings_or_help(user_input_lower)
         return {
             "bot": greeting_response,
-            "recommendations": []
+            "recommendations": {}
         }
 
     # Handle genre-based recommendations
@@ -246,15 +243,15 @@ def get_bot_response(user_input):
                 return {
                     "bot": f"I recommend movies in the {matched_genre.capitalize()} genre!",
                     "recommendations": formatted_recs,
-                    "count": len(formatted_recs)
+                    "count": len(recs)
                 }
             return {
                 "bot": f"No movies found in the {matched_genre.capitalize()} genre.",
-                "recommendations": []
+                "recommendations": {}
             }
         return {
             "bot": "Please mention a genre to get recommendations.",
-            "recommendations": []
+            "recommendations": {}
         }
 
     # Handle actor-based recommendations
@@ -277,15 +274,15 @@ def get_bot_response(user_input):
                 return {
                     "bot": f"I recommend movies starring {found_actor}! These are the movies by {found_actor} in our database.",
                     "recommendations": formatted_recs,
-                    "count": len(formatted_recs)
+                    "count": len(recs)
                 }
             return {
                 "bot": f"No movies found for actor {found_actor}.",
-                "recommendations": []
+                "recommendations": {}
             }
         return {
             "bot": f"No movies found for actor {actor_name.capitalize()}.",
-            "recommendations": []
+            "recommendations": {}
         }
 
     # Handle director-based recommendations
@@ -310,15 +307,15 @@ def get_bot_response(user_input):
                 return {
                     "bot": f"I recommend movies directed by {found_director}! These are the movies by {found_director} in our database.",
                     "recommendations": formatted_recs,
-                    "count": len(formatted_recs)
+                    "count": len(recs)
                 }
             return {
                 "bot": f"No movies found for director {found_director}.",
-                "recommendations": []
+                "recommendations": {}
             }
         return {
             "bot": f"No movies found for director {director_name.capitalize()}.",
-            "recommendations": []
+            "recommendations": {}
         }
 
     # Handle similar movie recommendations
@@ -331,22 +328,22 @@ def get_bot_response(user_input):
                     return {
                         "bot": f"I recommend movies similar to {title}!",
                         "recommendations": formatted_recs,
-                        "count": len(formatted_recs)
+                        "count": len(recs)
                     }
                 return {
                     "bot": f"No similar movies found for {title}.",
-                    "recommendations": []
+                    "recommendations": {}
                 }
         return {
             "bot": "Please mention a valid movie title to find similar ones.",
-            "recommendations": []
+            "recommendations": {}
         }
 
     # Default response for unrecognized input
     else:
         return {
             "bot": "I'm not sure what you're asking. Try mentioning a genre, actor, director, or a movie title.",
-            "recommendations": []
+            "recommendations": {}
         }
 
 # 🔹 Root Endpoint
@@ -355,7 +352,7 @@ async def root():
     return {
         "response": {
             "bot": "Welcome to the Movie Recommendation API! Use POST /recommend to get recommendations.",
-            "recommendations": []
+            "recommendations": {}
         }
     }
 
@@ -367,23 +364,24 @@ async def recommend(request: dict):
         return JSONResponse(content={
             "response": {
                 "bot": "Missing message",
-                "recommendations": []
+                "recommendations": {}
             }
         }, status_code=400)
     response = get_bot_response(user_input)
     return {"response": response}
 
-# # 🔹 New Endpoint to Get All Movies
-# @app.get("/movies")
-# async def get_all_movies():
-#     formatted_movies = format_recommendations_json(df)
-#     return {
-#         "response": {
-#             "bot": "Here are all the movies in the database.",
-#             "recommendations": formatted_movies,
-#             "count": len(formatted_movies)
-#         }
-#     }
+# 🔹 New Endpoint to Get All Movies
+@app.get("/movies")
+async def get_all_movies():
+    formatted_movies = format_recommendations_json(df)
+    return {
+        "response": {
+            "bot": "Here are all the movies in the database.",
+            "recommendations": formatted_movies,
+            "count": len(formatted_movies)
+        }
+    }
+
 
 # 🔹 Run Server (For local testing only; Railway uses gunicorn)
 if __name__ == "__main__":
