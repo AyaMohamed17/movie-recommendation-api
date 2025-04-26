@@ -158,11 +158,15 @@ def format_recommendations_json(recommendations):
                 director = row['crew']['director'] if isinstance(row['crew'], dict) and 'director' in row['crew'] else 'Unknown'
             except Exception:
                 director = 'Unknown'
+            # Convert cast list to dictionary
+            cast_dict = {}
+            for cast_idx, actor in enumerate(cast_list, 1):
+                cast_dict[f"actor_{cast_idx}"] = actor
             result[f"movie_title_{idx}"] = row['name']
             result[f"genre_{idx}"] = row['category']
             result[f"imdb_score_{idx}"] = row['rating']
             result[f"release_year_{idx}"] = year
-            result[f"cast_{idx}"] = cast_list
+            result[f"cast_{idx}"] = cast_dict
             result[f"director_{idx}"] = director
     return result
 
@@ -242,8 +246,7 @@ def get_bot_response(user_input):
                 formatted_recs = format_recommendations_json(recs)
                 return {
                     "bot": f"I recommend movies in the {matched_genre.capitalize()} genre!",
-                    "recommendations": formatted_recs,
-                    "count": len(recs)
+                    "recommendations": formatted_recs
                 }
             return {
                 "bot": f"No movies found in the {matched_genre.capitalize()} genre.",
@@ -273,8 +276,7 @@ def get_bot_response(user_input):
                 formatted_recs = format_recommendations_json(recs)
                 return {
                     "bot": f"I recommend movies starring {found_actor}! These are the movies by {found_actor} in our database.",
-                    "recommendations": formatted_recs,
-                    "count": len(recs)
+                    "recommendations": formatted_recs
                 }
             return {
                 "bot": f"No movies found for actor {found_actor}.",
@@ -306,8 +308,7 @@ def get_bot_response(user_input):
                 formatted_recs = format_recommendations_json(recs)
                 return {
                     "bot": f"I recommend movies directed by {found_director}! These are the movies by {found_director} in our database.",
-                    "recommendations": formatted_recs,
-                    "count": len(recs)
+                    "recommendations": formatted_recs
                 }
             return {
                 "bot": f"No movies found for director {found_director}.",
@@ -327,8 +328,7 @@ def get_bot_response(user_input):
                     formatted_recs = format_recommendations_json(recs)
                     return {
                         "bot": f"I recommend movies similar to {title}!",
-                        "recommendations": formatted_recs,
-                        "count": len(recs)
+                        "recommendations": formatted_recs
                     }
                 return {
                     "bot": f"No similar movies found for {title}.",
@@ -370,18 +370,16 @@ async def recommend(request: dict):
     response = get_bot_response(user_input)
     return {"response": response}
 
-# 🔹 New Endpoint to Get All Movies
+# 🔹 Endpoint to Get All Movies
 @app.get("/movies")
 async def get_all_movies():
     formatted_movies = format_recommendations_json(df)
     return {
         "response": {
             "bot": "Here are all the movies in the database.",
-            "recommendations": formatted_movies,
-            "count": len(formatted_movies)
+            "recommendations": formatted_movies
         }
     }
-
 
 # 🔹 Run Server (For local testing only; Railway uses gunicorn)
 if __name__ == "__main__":
