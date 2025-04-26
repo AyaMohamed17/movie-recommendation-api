@@ -274,7 +274,7 @@ def get_bot_response(user_input):
             if not recs.empty:
                 formatted_recs = format_recommendations_json(recs)
                 return {
-                    "bot": f"I recommend movies starring {found_actor}! These are the movies by {found_actor} in our database.",
+                    "bot": f"These are the movies by {found_actor} in our cinemas.",
                     "recommendations": formatted_recs
                 }
             return {
@@ -306,7 +306,7 @@ def get_bot_response(user_input):
             if not recs.empty:
                 formatted_recs = format_recommendations_json(recs)
                 return {
-                    "bot": f"I recommend movies directed by {found_director}! These are the movies by {found_director} in our database.",
+                    "bot": f"These are the recommended movies which are directed by {found_director} in our cinemas.",
                     "recommendations": formatted_recs
                 }
             return {
