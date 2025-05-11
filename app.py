@@ -10,15 +10,16 @@ import ast
 import re
 import os
 import json
+from datetime import datetime
 from dotenv import load_dotenv
 
-# تحميل متغيرات البيئة
+# Load environment variables
 load_dotenv()
 
 # 🔹 Initialize FastAPI
 app = FastAPI()
 
-# إضافة CORS Middleware (بديل لـ Flask-CORS)
+# Add CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -34,34 +35,39 @@ try:
         print("FIREBASE_CREDENTIALS environment variable not set.")
         exit(1)
     try:
-        # تحليل JSON
         cred_dict = json.loads(firebase_credentials)
-        # التأكد من أن private_key في صيغة PEM صحيحة
         if "private_key" in cred_dict:
             cred_dict["private_key"] = cred_dict["private_key"].strip()
     except json.JSONDecodeError as e:
         print(f"Invalid FIREBASE_CREDENTIALS format: {e}")
         exit(1)
-    # استخدام البيانات مباشرة كـ dictionary
     cred = credentials.Certificate(cred_dict)
     firebase_admin.initialize_app(cred)
     db = firestore.client()
-    movies_ref = db.collection("Movies")
 except Exception as e:
     print(f"Error initializing Firebase: {e}")
     exit(1)
 
-# 🔹 Fetch Movie Data from Firebase
+# 🔹 Fetch Movie Data from Firebase (Only 'playing now films' Collection)
 def fetch_movies_from_firebase():
     try:
         print("Fetching movies from Firestore...")
-        docs = movies_ref.limit(100).stream()
+        collection_name = 'playing now films'
+        collection_ref = db.collection(collection_name)
+        docs = collection_ref.limit(100).stream()
         movies = [doc.to_dict() for doc in docs]
-        print(f"Fetched {len(movies)} movies")
+        print(f"Fetched {len(movies)} movies from {collection_name}")
+        # Print raw data for debugging
+        print(f"Raw data from {collection_name}:")
+        for movie in movies:
+            print(movie)
+        
         if not movies:
-            print("No movies found in Firestore.")
+            print("No movies found in Firestore collection.")
             return pd.DataFrame()
-        return pd.DataFrame(movies)
+        df = pd.DataFrame(movies)
+        print(f"Total fetched movies: {len(df)}")
+        return df
     except Exception as e:
         print(f"Error fetching movies: {e}")
         return pd.DataFrame()
@@ -71,14 +77,27 @@ if df.empty:
     print("No data loaded from Firestore. Exiting...")
     exit(1)
 
+# Print available actors, categories, and directors for debugging
+all_actors = set(actor for sublist in df['cast'].dropna() for actor in (sublist if isinstance(sublist, list) else []))
+all_categories = set(df['category'].dropna().unique())
+all_directors = set(
+    crew.get('director', '') for crew in df['crew'].dropna() 
+    if isinstance(crew, dict) and 'director' in crew and crew['director']
+)
+print("Available actors:", all_actors)
+print("Available categories:", all_categories)
+print("Available directors:", all_directors)
+
 # 🔹 Clean Data
 df['description'] = df['description'].fillna('')
-df['rating'] = pd.to_numeric(df['rating'], errors='coerce')
-df['release_date'] = pd.to_datetime(df['release_date'], errors='coerce')
-df = df.dropna(subset=['rating', 'release_date'])
+df['rating'] = pd.to_numeric(df['rating'], errors='coerce').fillna(0)  # Default to 0 if missing
+df['release_date'] = pd.to_datetime(df['release_date'], errors='coerce').fillna(pd.Timestamp('2000-01-01'))  # Default date if missing
+# Standardize category (capitalize and strip)
+df['category'] = df['category'].astype(str).str.strip().str.capitalize()
+# Drop rows where category is empty
+df = df[df['category'] != '']
 
 # 🔹 TF-IDF for Similar Movie Recommendations
-# Combine category, description, and director for better similarity
 df['combined_features'] = (
     df['category'].fillna('') + ' ' +
     df['description'].fillna('') + ' ' +
@@ -89,9 +108,7 @@ tfidf_matrix = tfidf_vectorizer.fit_transform(df['combined_features'])
 
 # 🔹 Recommendation Functions
 def recommend_by_genre(genre):
-    # Define common genres to match against
     genre = genre.lower()
-    # Map variations of genre names to standard ones
     genre_mapping = {
         "action": "Action",
         "comedy": "Comedy",
@@ -99,11 +116,13 @@ def recommend_by_genre(genre):
         "science fiction": "Science Fiction",
         "sci-fi": "Science Fiction",
         "superhero": "Superhero",
-        "animation": "Animation"
+        "animation": "Animation",
+        "sports": "Sports",
+        "war": "War",
+        "thriller": "Thriller"
     }
     standard_genre = genre_mapping.get(genre, genre.capitalize())
-    # Case-insensitive search in category
-    matches = df[df['category'].str.lower().str.contains(standard_genre.lower(), na=False)]
+    matches = df[df['category'].str.lower() == standard_genre.lower()]  # Exact match
     return matches.sort_values(by=['rating', 'release_date'], ascending=[False, False]).head(5)
 
 def recommend_by_actor(actor):
@@ -119,27 +138,35 @@ def recommend_similar_movies(movie_title):
         return pd.DataFrame()
     idx = df[df['name'] == movie_title].index[0]
     cosine_sim = cosine_similarity(tfidf_matrix[idx], tfidf_matrix).flatten()
-    indices = cosine_sim.argsort()[-6:-1][::-1]  # Get top 5 similar movies (excluding the movie itself)
+    indices = cosine_sim.argsort()[-6:-1][::-1]
     return df.iloc[indices].sort_values(by=['rating', 'release_date'], ascending=[False, False])
 
-# 🔹 Greetings / Help
-def handle_greetings_or_help(user_input):
-    greetings = ["hello", "hi", "hey", "hay", "good morning", "good evening", "good afternoon", "مرحبا", "اهلا"]
+def search_by_movie_name(movie_name):
+    matches = df[df['name'].str.lower() == movie_name.lower()]  # Exact match
+    return matches.sort_values(by=['rating', 'release_date'], ascending=[False, False]).head(5)
+
+# 🔹 Greetings, Help, and Thank You Handler
+def handle_greetings_or_help_or_thanks(user_input):
+    greetings = ["hello", "hi", "hey", "hay", "good morning", "good evening", "good afternoon"]
     help_requests = ["help", "can you help", "what can you do", "tell me about movies", "recommend a movie"]
+    thank_you_keywords = ["thank you", "thanks", "thx", "thank u"]
     user_input_lower = user_input.lower()
-    for greeting in greetings:
+    
+    for thank in thank_you_keywords:
+        if thank in user_input_lower and not any(word in user_input_lower for word in greetings + help_requests):
+            return "You're welcome! Let me know if you need more help."
+    
+    for greeting in greetings + help_requests:
         if greeting in user_input_lower:
             return "Hello! How can I assist you today? Feel free to ask for movie recommendations or anything else."
-    for help_request in help_requests:
-        if help_request in user_input_lower:
-            return "I can recommend movies based on genre, actor, director, or similar movies. Just let me know what you're looking for!"
+    
     return None
 
 # 🔹 Check for Arabic Text
 def contains_arabic(text):
     return bool(re.search(r'[؀-ۿ]', text))
 
-# 🔹 Plain Text Formatter (for Postman)
+# 🔹 Plain Text Formatter
 def format_recommendations_json(recommendations):
     if not recommendations.empty:
         formatted_recommendations = []
@@ -169,181 +196,151 @@ def format_recommendations_json(recommendations):
         return formatted_recommendations
     return []
 
-# 🔹 Classify Input (Updated to use keyword-based rules)
+# 🔹 Classify Input
 def classify_input(user_input):
-    user_input_lower = user_input.lower()
-    # Check for greetings or help
-    if handle_greetings_or_help(user_input_lower):
-        return "greeting_or_help"
-    # Check for actor or director (look for "by" keyword)
-    if "by" in user_input_lower:
-        # Check if the name after "by" matches an actor
-        name_after_by = user_input_lower.split("by")[-1].strip()
-        all_actors = set(actor for sublist in df['cast'].dropna() for actor in (sublist if isinstance(sublist, list) else []))
-        if any(name_after_by in actor.lower() for actor in all_actors):
-            return "actor"
-        # Check if the name after "by" matches a director
-        all_directors = df['crew'].dropna().apply(lambda x: x.get('director') if isinstance(x, dict) else '').dropna().unique()
-        if any(name_after_by in director.lower() for director in all_directors):
-            return "director"
-        # If "by" is present, check if "director" is mentioned
-        if "director" in user_input_lower:
-            return "director"
-        return "actor"  # Default to actor if "by" is present but no match
-    # Check for similar movies (look for "like" or "similar to")
-    if "like" in user_input_lower or "similar to" in user_input_lower:
-        return "similar movie"
-    # Check for genre (look for genre names in the input)
-    for genre in df['category'].dropna().unique():
-        if genre.lower() in user_input_lower:
-            return "genre"
-    # Check for genre keywords explicitly
-    genre_keywords = ["action", "comedy", "drama", "science fiction", "sci-fi", "superhero", "animation"]
+    user_input_lower = user_input.lower().strip()
+    print(f"Classifying input: {user_input_lower}")
+    
+    # Check for greetings, help, or thank you first
+    if handle_greetings_or_help_or_thanks(user_input_lower):
+        return "greeting_help_or_thanks", None
+    
+    # Check for genre (exact match with keywords) first
+    genre_keywords = ["action", "comedy", "drama", "science fiction", "sci-fi", "superhero", "animation", "sports", "war", "thriller"]
+    matched_genre = None
     for genre in genre_keywords:
-        if genre in user_input_lower:
-            return "genre"
-    return "unknown"
+        if user_input_lower == genre or user_input_lower == f"{genre} movie" or user_input_lower == f"{genre} movies":
+            if any(genre == g.lower() for g in all_categories):
+                matched_genre = genre
+                break
+    if matched_genre:
+        print(f"Matched genre: {matched_genre}")
+        return "genre", matched_genre
+    
+    # Check for movie name (exact match)
+    for title in df['name'].dropna().unique():
+        if user_input_lower == title.lower():  # Exact match
+            print(f"Matched movie name: {title}")
+            return "movie_name", title
+    
+    # Check for actor within the sentence
+    all_actors = set(actor for sublist in df['cast'].dropna() for actor in (sublist if isinstance(sublist, list) else []))
+    found_actor = None
+    for actor in all_actors:
+        if actor.lower() in user_input_lower:  # Check if actor name appears in the input
+            found_actor = actor
+            break
+    if found_actor:
+        print(f"Matched actor: {found_actor}")
+        return "actor", found_actor
+    
+    # Check for director within the sentence
+    all_directors = set(
+        crew.get('director', '') for crew in df['crew'].dropna() 
+        if isinstance(crew, dict) and 'director' in crew and crew['director']
+    )
+    found_director = None
+    for director in all_directors:
+        if director.lower() in user_input_lower:  # Check if director name appears in the input
+            found_director = director
+            break
+    if found_director:
+        print(f"Matched director: {found_director}")
+        return "director", found_director
+    
+    # Default to unknown
+    print("No match found")
+    return "unknown", user_input
 
 # 🔹 Final Bot Response
 def get_bot_response(user_input):
-    # Check for Arabic input
+    # Reject any input containing Arabic characters
     if contains_arabic(user_input):
         return {
             "bot": "Please use English only for communication.",
             "recommendations": []
         }
     
+    # Handle empty input
+    if not user_input or user_input.strip() == "":
+        return {
+            "bot": "It looks like you didn't enter anything. Please try a genre, actor, or movie name!",
+            "recommendations": []
+        }
+    
     # Classify the input
-    label = classify_input(user_input)
+    label, value = classify_input(user_input)
     user_input_lower = user_input.lower()
 
-    # Handle greetings or help requests
-    if label == "greeting_or_help":
-        greeting_response = handle_greetings_or_help(user_input_lower)
+    # Handle greetings, help, or thank you
+    if label == "greeting_help_or_thanks":
+        response = handle_greetings_or_help_or_thanks(user_input_lower)
         return {
-            "bot": greeting_response,
+            "bot": response,
+            "recommendations": []
+        }
+
+    # Handle movie name search
+    if label == "movie_name":
+        recs = search_by_movie_name(value)
+        if not recs.empty:
+            formatted_recs = format_recommendations_json(recs)
+            return {
+                "bot": f"Movies found for '{value}'",
+                "recommendations": formatted_recs
+            }
+        return {
+            "bot": f"No movies found for '{value}'",
             "recommendations": []
         }
 
     # Handle genre-based recommendations
     if label == "genre":
-        genre_keywords = ["action", "comedy", "drama", "science fiction", "sci-fi", "superhero", "animation"]
-        matched_genre = None
-        for genre in genre_keywords:
-            if genre in user_input_lower:
-                matched_genre = genre
-                break
-        # If no keyword matched, try matching against categories in the database
-        if not matched_genre:
-            for genre in df['category'].dropna().unique():
-                if genre.lower() in user_input_lower:
-                    matched_genre = genre.lower()
-                    break
-        if matched_genre:
-            recs = recommend_by_genre(matched_genre)
-            if not recs.empty:
-                formatted_recs = format_recommendations_json(recs)
-                return {
-                    "bot": f"I recommend movies in the {matched_genre.capitalize()} genre!",
-                    "recommendations": formatted_recs
-                }
+        recs = recommend_by_genre(value)
+        if not recs.empty:
+            formatted_recs = format_recommendations_json(recs)
             return {
-                "bot": f"No movies found in the {matched_genre.capitalize()} genre.",
-                "recommendations": []
+                "bot": f"Movies found for '{value.capitalize()}'",
+                "recommendations": formatted_recs
             }
         return {
-            "bot": "Please mention a genre to get recommendations.",
+            "bot": f"No movies found for '{value.capitalize()}'",
             "recommendations": []
         }
 
     # Handle actor-based recommendations
-    elif label == "actor":
-        all_actors = set(actor for sublist in df['cast'].dropna() for actor in (sublist if isinstance(sublist, list) else []))
-        # Extract the name after "by" if present, otherwise use the whole input
-        if "by" in user_input_lower:
-            actor_name = user_input_lower.split("by")[-1].strip()
-        else:
-            actor_name = user_input_lower
-        found_actor = None
-        for actor in all_actors:
-            if actor.lower() in actor_name:
-                found_actor = actor
-                break
-        if found_actor:
-            recs = recommend_by_actor(found_actor)
-            if not recs.empty:
-                formatted_recs = format_recommendations_json(recs)
-                return {
-                    "bot": f"These are the movies by {found_actor} in our cinemas.",
-                    "recommendations": formatted_recs
-                }
+    if label == "actor":
+        recs = recommend_by_actor(value)
+        if not recs.empty:
+            formatted_recs = format_recommendations_json(recs)
             return {
-                "bot": f"No movies found for actor {found_actor}.",
-                "recommendations": []
+                "bot": f"Movies found for '{value}'",
+                "recommendations": formatted_recs
             }
         return {
-            "bot": f"No movies found for actor {actor_name.capitalize()}.",
+            "bot": f"No movies found for actor '{value}'",
             "recommendations": []
         }
 
     # Handle director-based recommendations
-    elif label == "director":
-        all_directors = df['crew'].dropna().apply(lambda x: x.get('director') if isinstance(x, dict) else '').dropna().unique()
-        # Extract the name after "by" if present, otherwise use the whole input
-        if "by" in user_input_lower:
-            director_name = user_input_lower.split("by")[-1].strip()
-        else:
-            director_name = user_input_lower
-        # Remove "director" keyword if present
-        director_name = director_name.replace("director", "").strip()
-        found_director = None
-        for director in all_directors:
-            if director.lower() in director_name:
-                found_director = director
-                break
-        if found_director:
-            recs = recommend_by_director(found_director)
-            if not recs.empty:
-                formatted_recs = format_recommendations_json(recs)
-                return {
-                    "bot": f"These are the recommended movies which are directed by {found_director} in our cinemas.",
-                    "recommendations": formatted_recs
-                }
+    if label == "director":
+        recs = recommend_by_director(value)
+        if not recs.empty:
+            formatted_recs = format_recommendations_json(recs)
             return {
-                "bot": f"No movies found for director {found_director}.",
-                "recommendations": []
+                "bot": f"Movies found for director '{value}'",
+                "recommendations": formatted_recs
             }
         return {
-            "bot": f"No movies found for director {director_name.capitalize()}.",
-            "recommendations": []
-        }
-
-    # Handle similar movie recommendations
-    elif label == "similar movie":
-        for title in df['name'].dropna().unique():
-            if title.lower() in user_input_lower:
-                recs = recommend_similar_movies(title)
-                if not recs.empty:
-                    formatted_recs = format_recommendations_json(recs)
-                    return {
-                        "bot": f"I recommend movies similar to {title}!",
-                        "recommendations": formatted_recs
-                    }
-                return {
-                    "bot": f"No similar movies found for {title}.",
-                    "recommendations": []
-                }
-        return {
-            "bot": "Please mention a valid movie title to find similar ones.",
+            "bot": f"No movies found for director '{value}'",
             "recommendations": []
         }
 
     # Default response for unrecognized input
-    else:
-        return {
-            "bot": "I'm not sure what you're asking. Try mentioning a genre, actor, director, or a movie title.",
-            "recommendations": []
-        }
+    return {
+        "bot": f"No results found for '{user_input}'. Try a movie name, genre, actor, or director.",
+        "recommendations": []
+    }
 
 # 🔹 Root Endpoint
 @app.get("/")
@@ -380,7 +377,7 @@ async def get_all_movies():
         }
     }
 
-# 🔹 Run Server (For local testing only; Railway uses gunicorn)
+# 🔹 Run Server
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 5000))
